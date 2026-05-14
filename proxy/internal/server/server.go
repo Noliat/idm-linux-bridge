@@ -193,10 +193,11 @@ func (s *Server) handleCapture(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	idmFound := s.launcher.IsIDMAvailable()
 	status := map[string]interface{}{
-		"status":     "running",
-		"version":    "1.0.0",
-		"idmFound":   idmFound,
-		"winePrefix": s.cfg.WinePrefix,
+		"status":         "running",
+		"version":        "1.0.0",
+		"idmFound":       idmFound,
+		"winePrefix":     s.cfg.WinePrefix,
+		"reverseProxy":   fmt.Sprintf("127.0.0.1:%d", s.launcher.ProxyPort()),
 	}
 	s.respond(w, http.StatusOK, status)
 }

@@ -1,67 +1,48 @@
-// background.js — Service Worker da extensão IDM Linux Bridge
-// Intercepta downloads e os redireciona ao proxy local (Go)
+// background.js — Service Worker MV3 (Chrome/Firefox compatível)
+// Usa chrome.downloads API em vez de webRequest blocking (removido no MV3)
 
-const BRIDGE_URL = "http://127.0.0.1:6969";
-const BRIDGE_STATUS_URL = `${BRIDGE_URL}/status`;
-const BRIDGE_CAPTURE_URL = `${BRIDGE_URL}/capture`;
-const BRIDGE_COOKIES_URL = `${BRIDGE_URL}/cookies`;
+const BRIDGE_URL   = "http://127.0.0.1:6969";
+const CAPTURE_URL  = `${BRIDGE_URL}/capture`;
+const STATUS_URL   = `${BRIDGE_URL}/status`;
+const COOKIES_URL  = `${BRIDGE_URL}/cookies`;
 
-// Tipos de arquivo que o IDM deve interceptar
-const DOWNLOADABLE_EXTENSIONS = new Set([
-  // Vídeo
-  "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m3u8",
-  // Áudio
-  "mp3", "flac", "wav", "aac", "ogg", "m4a", "opus",
-  // Compactados
-  "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst",
-  // Documentos
-  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-  // Instaladores
-  "exe", "msi", "deb", "rpm", "AppImage", "iso", "dmg",
-  // Outros
-  "apk", "torrent"
+// Extensões interceptadas pelo IDM
+const DL_EXTENSIONS = new Set([
+  "mp4","mkv","avi","mov","wmv","flv","webm","m4v","ts",
+  "mp3","flac","wav","aac","ogg","m4a","opus",
+  "zip","rar","7z","gz","bz2","xz","zst","tar",
+  "pdf","doc","docx","xls","xlsx","ppt","pptx",
+  "exe","msi","deb","rpm","iso","dmg","apk","torrent"
 ]);
 
-// Content-types que indicam um download
-const DOWNLOADABLE_CONTENT_TYPES = [
+// Content-Types que indicam download
+const DL_MIME_PREFIXES = [
   "application/octet-stream",
-  "application/zip",
-  "application/x-rar",
-  "application/x-7z-compressed",
-  "application/pdf",
-  "video/",
-  "audio/",
+  "application/zip","application/x-rar","application/x-7z-compressed",
+  "application/pdf","application/x-bittorrent",
+  "video/","audio/",
   "application/x-iso9660-image",
-  "application/vnd.android.package-archive"
+  "application/vnd.android.package-archive",
+  "application/x-msdownload"
 ];
 
-// Sites que sempre devem ser interceptados (independente de extensão)
-const ALWAYS_INTERCEPT_SITES = [
-  "youtube.com", "youtu.be",
-  "drive.google.com",
-  "hotmart.com",
-  "udemy.com",
-  "coursera.org",
-  "dropbox.com",
-  "mega.nz",
-  "twitch.tv",
-  "vimeo.com",
-  "dailymotion.com",
-  "facebook.com"
+// Sites de vídeo: interceptar sempre independente de extensão
+const VIDEO_SITES = [
+  "youtube.com","youtu.be","drive.google.com","hotmart.com",
+  "udemy.com","coursera.org","dropbox.com","mega.nz",
+  "twitch.tv","vimeo.com","dailymotion.com","facebook.com"
 ];
 
-// Estado do bridge
 let bridgeAvailable = false;
 let interceptEnabled = true;
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // Inicialização
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(async () => {
-  console.log("[IDM Bridge] Extensão instalada.");
-  setupContextMenu();
   await loadSettings();
+  setupContextMenu();
   checkBridgeStatus();
 });
 
@@ -70,23 +51,102 @@ chrome.runtime.onStartup.addListener(async () => {
   checkBridgeStatus();
 });
 
-// Verificar status do bridge a cada 30 segundos
-setInterval(checkBridgeStatus, 30000);
+// Checar bridge a cada 30s
+setInterval(checkBridgeStatus, 30_000);
 
-// ─────────────────────────────────────────────
-// Menu de contexto (botão direito)
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// INTERCEPTAÇÃO PRINCIPAL — chrome.downloads.onCreated (MV3 ✓)
+// ─────────────────────────────────────────────────────────────
+// Abordagem correta no MV3: o browser inicia o download,
+// capturamos o evento, cancelamos e repassamos ao IDM.
+
+chrome.downloads.onCreated.addListener(async (downloadItem) => {
+  if (!interceptEnabled || !bridgeAvailable) return;
+  if (!shouldIntercept(downloadItem.url, downloadItem.mime || "")) return;
+
+  // Cancelar o download nativo imediatamente
+  chrome.downloads.cancel(downloadItem.id, async () => {
+    // Remover da lista de downloads do browser (limpeza visual)
+    chrome.downloads.erase({ id: downloadItem.id });
+
+    const cookies  = await getCookiesForUrl(downloadItem.url);
+    const referrer = downloadItem.referrer || "";
+
+    // Extrair filename com prioridade: header > URL > mime
+    let filename = "";
+    if (downloadItem.filename) {
+      // Chrome já decodificou o Content-Disposition
+      filename = downloadItem.filename.split("/").pop().split("\\").pop();
+    }
+    if (!filename || isPageFilename(filename)) {
+      filename = extractFilenameFromUrl(downloadItem.url);
+    }
+    // Se ainda sem extensão, inferir pelo MIME type
+    if (filename && !hasDownloadExtension(filename) && downloadItem.mime) {
+      const ext = extByMime(downloadItem.mime);
+      if (ext) filename += ext;
+    }
+
+    await captureDownload({
+      url: downloadItem.url,
+      filename,
+      cookies,
+      referrer,
+      mime: downloadItem.mime || ""
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// DETECÇÃO COMPLEMENTAR — webRequest somente leitura (sem blocking)
+// Captura streams de vídeo e respostas com Content-Disposition
+// que o browser não classifica como "download" automaticamente.
+// ─────────────────────────────────────────────────────────────
+
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    if (!interceptEnabled || !bridgeAvailable) return;
+
+    const ct   = getHeader(details.responseHeaders, "content-type") || "";
+    const disp = getHeader(details.responseHeaders, "content-disposition") || "";
+
+    const isDownloadResponse =
+      disp.toLowerCase().includes("attachment") ||
+      isDownloadableMime(ct);
+
+    if (!isDownloadResponse) return;
+
+    const filename = extractFilenameFromDisposition(disp) || extractFilenameFromUrl(details.url);
+
+    // Assíncrono — não bloqueia a requisição
+    getCookiesForUrl(details.url).then(cookies => {
+      captureDownload({
+        url: details.url,
+        filename,
+        cookies,
+        referrer: getHeader(details.requestHeaders || [], "referer") || "",
+        tabId: details.tabId
+      });
+    });
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]   // ← SEM "blocking" — compatível com MV3
+);
+
+// ─────────────────────────────────────────────────────────────
+// Menu de contexto
+// ─────────────────────────────────────────────────────────────
 
 function setupContextMenu() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "idm-download-link",
-      title: "Baixar com IDM",
+      title: "⬇ Baixar com IDM",
       contexts: ["link", "video", "audio", "image"]
     });
     chrome.contextMenus.create({
-      id: "idm-download-page-video",
-      title: "Baixar vídeo desta página com IDM",
+      id: "idm-download-video",
+      title: "⬇ Baixar vídeo desta página com IDM",
       contexts: ["page"]
     });
   });
@@ -94,352 +154,255 @@ function setupContextMenu() {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!bridgeAvailable) {
-    notify("IDM Bridge não está rodando", "Inicie o bridge com: idm-bridge");
+    notify("IDM Bridge offline", "Inicie: systemctl --user start idm-bridge");
     return;
   }
-
   if (info.menuItemId === "idm-download-link" && info.linkUrl) {
-    await captureDownload({
-      url: info.linkUrl,
-      tabId: tab.id,
-      pageUrl: tab.url
-    });
-  } else if (info.menuItemId === "idm-download-page-video") {
-    // Injetar script para encontrar vídeos na página
+    const cookies = await getCookiesForUrl(info.linkUrl);
+    await captureDownload({ url: info.linkUrl, cookies, referrer: tab.url });
+  } else if (info.menuItemId === "idm-download-video") {
     chrome.tabs.sendMessage(tab.id, { action: "findVideos" });
   }
 });
 
-// ─────────────────────────────────────────────
-// Interceptação de downloads via webRequest
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Captura e envio ao bridge
+// ─────────────────────────────────────────────────────────────
 
-// Interceptar respostas HTTP para detectar downloads por Content-Type
-chrome.webRequest.onHeadersReceived.addListener(
-  async (details) => {
-    if (!interceptEnabled || !bridgeAvailable) return;
-    if (details.type === "main_frame" || details.type === "sub_frame") return;
+async function captureDownload({ url, filename = "", cookies = "", referrer = "", tabId = -1 }) {
+  if (!url) return false;
 
-    const contentType = getHeader(details.responseHeaders, "content-type") || "";
-    const contentDisp = getHeader(details.responseHeaders, "content-disposition") || "";
+  if (!referrer && tabId > 0) {
+    try { const tab = await chrome.tabs.get(tabId); referrer = tab.url || ""; } catch (_) {}
+  }
 
-    const isDownload =
-      isDownloadableContentType(contentType) ||
-      contentDisp.toLowerCase().includes("attachment");
-
-    if (!isDownload) return;
-
-    // Extrair nome do arquivo do Content-Disposition ou URL
-    const filename = extractFilename(contentDisp, details.url);
-
-    // Cancelar o download nativo e enviar ao IDM
-    const cookies = await getCookiesForUrl(details.url);
-    const referer = getHeader(details.requestHeaders || [], "referer") || "";
-
-    await captureDownload({
-      url: details.url,
-      filename,
-      cookies,
-      referrer: referer,
-      tabId: details.tabId
-    });
-
-    // Bloquear o download nativo do navegador
-    return { cancel: true };
-  },
-  { urls: ["<all_urls>"] },
-  ["responseHeaders", "blocking"]
-);
-
-// Interceptar requisições de arquivos com extensões conhecidas
-chrome.webRequest.onBeforeRequest.addListener(
-  async (details) => {
-    if (!interceptEnabled || !bridgeAvailable) return;
-    if (details.type !== "main_frame") return;
-
-    const url = details.url;
-    if (!isDownloadableURL(url)) return;
-
-    const cookies = await getCookiesForUrl(url);
-
-    await captureDownload({
-      url,
-      cookies,
-      tabId: details.tabId
-    });
-
-    return { cancel: true };
-  },
-  { urls: ["<all_urls>"] },
-  ["blocking"]
-);
-
-// ─────────────────────────────────────────────
-// Captura de download
-// ─────────────────────────────────────────────
-
-async function captureDownload({ url, filename = "", cookies = "", referrer = "", tabId = -1, pageUrl = "" }) {
-  if (!bridgeAvailable) {
-    console.warn("[IDM Bridge] Bridge indisponível, download não capturado:", url);
-    return false;
+  // Enriquecer com cookies do referrer (para sites autenticados)
+  if (referrer && referrer !== url) {
+    try {
+      const refCookies = await getCookiesForUrl(referrer);
+      cookies = mergeCookies(cookies, refCookies);
+    } catch (_) {}
   }
 
   try {
-    // Obter tab info para referrer
-    if (tabId > 0 && !referrer) {
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        referrer = tab.url || "";
-        pageUrl = pageUrl || tab.url || "";
-      } catch (_) {}
-    }
-
-    // Detectar site para tratamento especial
-    const site = detectSite(url);
-
-    // Coletar cookies se não foram fornecidos
-    if (!cookies) {
-      cookies = await getCookiesForUrl(url);
-      // Coletar também cookies do referrer (para autenticação)
-      if (referrer) {
-        const refCookies = await getCookiesForUrl(referrer);
-        cookies = mergeCookieStrings(cookies, refCookies);
-      }
-    }
-
-    const payload = {
-      url,
-      filename,
-      cookies,
-      referrer,
-      userAgent: navigator.userAgent,
-      site,
-      headers: {},
-      sessionData: {}
-    };
-
-    const resp = await fetch(BRIDGE_CAPTURE_URL, {
+    const resp = await fetch(CAPTURE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        url, filename, cookies, referrer,
+        userAgent: navigator.userAgent,
+        site: detectSite(url),
+        headers: {}, sessionData: {}
+      })
     });
 
     if (resp.ok) {
       const data = await resp.json();
-      console.log("[IDM Bridge] Download capturado:", url, "| Job:", data.jobId);
-      notify("Download enviado ao IDM", `Arquivo: ${filename || url.split("/").pop()}`);
+      notify("⬇ Download enviado ao IDM", filename || extractFilenameFromUrl(url) || url);
+      console.log("[IDM Bridge] Capturado:", url, "| job:", data.jobId);
       return true;
     }
   } catch (err) {
-    console.error("[IDM Bridge] Erro ao capturar download:", err);
+    console.error("[IDM Bridge] Erro ao enviar ao bridge:", err);
   }
   return false;
 }
 
-// ─────────────────────────────────────────────
-// Comunicação com content scripts
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Mensagens dos content scripts e popup
+// ─────────────────────────────────────────────────────────────
 
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  switch (message.action) {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  (async () => {
+    switch (msg.action) {
 
-    case "captureDownload":
-      const success = await captureDownload({
-        url: message.url,
-        filename: message.filename || "",
-        cookies: message.cookies || "",
-        referrer: message.referrer || sender.tab?.url || "",
-        tabId: sender.tab?.id || -1
-      });
-      sendResponse({ success });
-      break;
-
-    case "getBridgeStatus":
-      sendResponse({ available: bridgeAvailable });
-      break;
-
-    case "getSettings":
-      const settings = await getSettings();
-      sendResponse(settings);
-      break;
-
-    case "updateSettings":
-      await saveSettings(message.settings);
-      sendResponse({ ok: true });
-      break;
-
-    case "sendCookies":
-      await sendCookiesToBridge(message.domain, message.cookies);
-      sendResponse({ ok: true });
-      break;
-
-    case "videosFound":
-      // Content script encontrou vídeos na página
-      if (message.videos && message.videos.length > 0) {
-        // Capturar o vídeo de maior qualidade
-        const best = message.videos[0];
-        await captureDownload({
-          url: best.url,
-          filename: best.title || "",
-          referrer: sender.tab?.url || "",
+      case "captureDownload": {
+        const ok = await captureDownload({
+          url: msg.url,
+          filename: msg.filename || "",
+          cookies: msg.cookies || "",
+          referrer: msg.referrer || sender.tab?.url || "",
           tabId: sender.tab?.id || -1
         });
+        sendResponse({ success: ok });
+        break;
       }
-      sendResponse({ ok: true });
-      break;
-  }
-  return true; // manter canal aberto para resposta assíncrona
+
+      case "getBridgeStatus":
+        sendResponse({ available: bridgeAvailable });
+        break;
+
+      case "getSettings":
+        sendResponse(await getSettings());
+        break;
+
+      case "updateSettings":
+        await saveSettings(msg.settings);
+        if (msg.settings.interceptEnabled !== undefined)
+          interceptEnabled = msg.settings.interceptEnabled;
+        sendResponse({ ok: true });
+        break;
+
+      case "sendCookies":
+        try {
+          await fetch(COOKIES_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ domain: msg.domain, cookies: msg.cookies })
+          });
+        } catch (_) {}
+        sendResponse({ ok: true });
+        break;
+
+      case "videosFound":
+        if (msg.videos?.length > 0) {
+          const best = msg.videos[0];
+          await captureDownload({
+            url: best.url,
+            filename: best.title || "",
+            referrer: sender.tab?.url || "",
+            tabId: sender.tab?.id || -1
+          });
+        }
+        sendResponse({ ok: true });
+        break;
+    }
+  })();
+  return true;
 });
 
-// ─────────────────────────────────────────────
-// Helpers de cookies
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
 
-async function getCookiesForUrl(url) {
+function shouldIntercept(url, mime) {
+  if (isDownloadableMime(mime)) return true;
   try {
-    const cookies = await chrome.cookies.getAll({ url });
-    return cookies.map(c => `${c.name}=${c.value}`).join("; ");
-  } catch (_) {
-    return "";
-  }
+    const ext  = new URL(url).pathname.split(".").pop().toLowerCase().split("?")[0];
+    if (DL_EXTENSIONS.has(ext)) return true;
+    const host = new URL(url).hostname.replace("www.", "");
+    return VIDEO_SITES.some(s => host === s || host.endsWith("." + s));
+  } catch (_) { return false; }
 }
 
-async function sendCookiesToBridge(domain, cookies) {
-  try {
-    await fetch(BRIDGE_COOKIES_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ domain, cookies })
-    });
-  } catch (_) {}
+function isDownloadableMime(mime) {
+  if (!mime) return false;
+  const m = mime.toLowerCase().split(";")[0].trim();
+  return DL_MIME_PREFIXES.some(p => m.startsWith(p));
 }
 
-function mergeCookieStrings(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  const seen = new Set();
-  const all = [...a.split(";"), ...b.split(";")]
-    .map(s => s.trim())
-    .filter(s => s.includes("="))
-    .filter(s => {
-      const key = s.split("=")[0].trim();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  return all.join("; ");
+// Retorna true se o filename parece uma página web (index.html, etc.)
+function isPageFilename(name) {
+  if (!name) return true;
+  const pagePat = /\.(html?|php|asp|aspx|jsp|cfm|cgi|pl|py|rb)$/i;
+  return pagePat.test(name) || name === "index" || name === "download";
 }
 
-// ─────────────────────────────────────────────
-// Helpers de detecção
-// ─────────────────────────────────────────────
-
-function isDownloadableURL(url) {
-  try {
-    const u = new URL(url);
-    const ext = u.pathname.split(".").pop().toLowerCase();
-    return DOWNLOADABLE_EXTENSIONS.has(ext);
-  } catch (_) {
-    return false;
-  }
+// Retorna true se o filename já tem uma extensão de arquivo baixável
+function hasDownloadExtension(name) {
+  if (!name) return false;
+  const ext = name.split(".").pop().toLowerCase();
+  return DL_EXTENSIONS.has(ext);
 }
 
-function isDownloadableContentType(contentType) {
-  return DOWNLOADABLE_CONTENT_TYPES.some(t => contentType.toLowerCase().includes(t));
+// Retorna extensão de arquivo a partir do MIME type
+function extByMime(mime) {
+  const m = mime.toLowerCase().split(";")[0].trim();
+  const map = {
+    "video/mp4": ".mp4", "video/x-matroska": ".mkv", "video/webm": ".webm",
+    "video/x-msvideo": ".avi", "video/quicktime": ".mov", "video/mp2t": ".ts",
+    "audio/mpeg": ".mp3", "audio/flac": ".flac", "audio/wav": ".wav",
+    "audio/aac": ".aac", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
+    "application/zip": ".zip", "application/x-rar-compressed": ".rar",
+    "application/x-7z-compressed": ".7z", "application/gzip": ".gz",
+    "application/pdf": ".pdf", "application/x-msdownload": ".exe",
+    "application/vnd.android.package-archive": ".apk",
+    "application/x-iso9660-image": ".iso", "application/x-bittorrent": ".torrent",
+  };
+  return map[m] || "";
 }
 
 function detectSite(url) {
   try {
     const host = new URL(url).hostname.replace("www.", "");
-    for (const site of ALWAYS_INTERCEPT_SITES) {
-      if (host === site || host.endsWith("." + site)) {
-        return site;
-      }
-    }
-    return host;
-  } catch (_) {
-    return "";
-  }
+    return VIDEO_SITES.find(s => host === s || host.endsWith("." + s)) || host;
+  } catch (_) { return ""; }
 }
 
-function extractFilename(contentDisp, url) {
-  // Tentar extrair do Content-Disposition
-  const match = contentDisp.match(/filename\*?=['"]?([^'";]+)['"]?/i);
-  if (match) return decodeURIComponent(match[1].trim());
-
-  // Tentar extrair da URL
-  try {
-    const pathname = new URL(url).pathname;
-    const parts = pathname.split("/");
-    return decodeURIComponent(parts[parts.length - 1]) || "";
-  } catch (_) {
-    return "";
-  }
+function extractFilenameFromUrl(url) {
+  try { return decodeURIComponent(new URL(url).pathname.split("/").pop()) || ""; }
+  catch (_) { return ""; }
 }
 
-function getHeader(headers, name) {
-  if (!headers) return null;
+function extractFilenameFromDisposition(disp) {
+  if (!disp) return "";
+  const m = disp.match(/filename\*?=(?:UTF-8'')?["']?([^"';\r\n]+)["']?/i);
+  return m ? decodeURIComponent(m[1].trim()) : "";
+}
+
+function getHeader(headers = [], name) {
   const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
-  return h ? h.value : null;
+  return h?.value || null;
 }
 
-// ─────────────────────────────────────────────
-// Status do bridge
-// ─────────────────────────────────────────────
+async function getCookiesForUrl(url) {
+  try {
+    const list = await chrome.cookies.getAll({ url });
+    return list.map(c => `${c.name}=${c.value}`).join("; ");
+  } catch (_) { return ""; }
+}
+
+function mergeCookies(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const seen = new Set();
+  return [...a.split(";"), ...b.split(";")]
+    .map(s => s.trim())
+    .filter(s => s.includes("="))
+    .filter(s => {
+      const k = s.split("=")[0].trim();
+      return seen.has(k) ? false : !!seen.add(k);
+    })
+    .join("; ");
+}
 
 async function checkBridgeStatus() {
   try {
-    const resp = await fetch(BRIDGE_STATUS_URL, { signal: AbortSignal.timeout(3000) });
+    const resp = await fetch(STATUS_URL, { signal: AbortSignal.timeout(3000) });
     const data = await resp.json();
     bridgeAvailable = data.status === "running";
-
-    // Atualizar ícone baseado no status
-    chrome.action.setBadgeText({ text: bridgeAvailable ? "" : "OFF" });
-    chrome.action.setBadgeBackgroundColor({ color: bridgeAvailable ? "#22c55e" : "#ef4444" });
   } catch (_) {
     bridgeAvailable = false;
-    chrome.action.setBadgeText({ text: "OFF" });
-    chrome.action.setBadgeBackgroundColor({ color: "#ef4444" });
   }
+  chrome.action.setBadgeText({ text: bridgeAvailable ? "" : "OFF" });
+  chrome.action.setBadgeBackgroundColor({ color: bridgeAvailable ? "#22c55e" : "#ef4444" });
 }
 
-// ─────────────────────────────────────────────
-// Configurações
-// ─────────────────────────────────────────────
-
 async function getSettings() {
-  const result = await chrome.storage.sync.get({
+  return chrome.storage.sync.get({
     interceptEnabled: true,
     notificationsEnabled: true,
-    alwaysInterceptSites: ALWAYS_INTERCEPT_SITES,
-    downloadableExtensions: [...DOWNLOADABLE_EXTENSIONS],
     bridgePort: 6969
   });
-  return result;
 }
 
 async function loadSettings() {
-  const settings = await getSettings();
-  interceptEnabled = settings.interceptEnabled;
+  const s = await getSettings();
+  interceptEnabled = s.interceptEnabled;
 }
 
 async function saveSettings(settings) {
   await chrome.storage.sync.set(settings);
-  await loadSettings();
 }
-
-// ─────────────────────────────────────────────
-// Notificações
-// ─────────────────────────────────────────────
 
 function notify(title, message) {
   chrome.storage.sync.get({ notificationsEnabled: true }, ({ notificationsEnabled }) => {
     if (!notificationsEnabled) return;
     chrome.notifications.create({
       type: "basic",
-      iconUrl: "icons/icon48.png",
+      iconUrl: "icons/icon48.svg",
       title,
-      message,
+      message: String(message).slice(0, 100),
       priority: 0
     });
   });
