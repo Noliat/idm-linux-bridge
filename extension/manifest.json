@@ -1,22 +1,24 @@
 {
   "manifest_version": 3,
   "name": "IDM Linux Bridge",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "description": "Integração do Internet Download Manager com Linux via Wine",
-  "author": "IDM Linux Bridge",
 
   "permissions": [
     "webRequest",
+    "downloads",
     "tabs",
     "cookies",
     "storage",
     "notifications",
     "contextMenus",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "scripting",
+    "alarms"
   ],
 
   "host_permissions": [
-    "<all_urls>",
+    "\u003Call_urls>",
     "http://127.0.0.1:6969/*"
   ],
 
@@ -27,9 +29,16 @@
 
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["*://*/*"],
+      "js": ["src/parser_m3u8.js", "src/interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*/*" ],
       "js": ["src/content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "world": "ISOLATED"
     }
   ],
 
@@ -50,8 +59,15 @@
 
   "web_accessible_resources": [
     {
-      "resources": ["src/interceptor.js"],
+      "resources": ["icons/*.svg", "icons/*.png", "src/interceptor.js"],
       "matches": ["<all_urls>"]
     }
-  ]
+  ],
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "idm-linux-bridge@local",
+      "strict_min_version": "109.0"
+    }
+  }
 }

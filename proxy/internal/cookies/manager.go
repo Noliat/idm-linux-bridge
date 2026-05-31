@@ -32,14 +32,30 @@ func (m *Manager) Store(domain, cookieStr string) {
 
 // Enrich combina cookies recebidos da extensão com cookies armazenados para o domínio.
 // Cookies da extensão têm prioridade sobre os armazenados.
+//
+// Estratégia de busca em 3 camadas:
+//
+//  Camada 1 — correspondência exata ou por subdomínio:
+//    cf-media.hotmart.com  →  cf-media.hotmart.com  ✓
+//    cf-media.hotmart.com  →  hotmart.com           ✓ (HasSuffix)
+//
+//  Camada 2 — fallback por nome de site (parâmetro `site`):
+//    CDN usa domínio diferente do site principal (ex: cf-media.hotmart.com
+//    não termina em .hotmart.com por causa do prefixo cf-media).
+//    Se o storage tiver "hotmart.com" e site=="hotmart", encontra.
+//
+//  Camada 3 — fallback por domínio raiz (eTLD+1):
+//    Extrai o domínio raiz da URL do CDN (hotmart.com de cf-media.hotmart.com)
+//    e busca cookies armazenados para esse domínio raiz.
+//    Cobre casos onde o domínio foi armazenado sem o subdomínio do CDN.
 func (m *Manager) Enrich(rawURL, extensionCookies, site string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Extrair domínio da URL
 	domain := extractDomain(rawURL)
+	site    = strings.ToLower(strings.TrimSpace(site))
 
-	// Coletar cookies armazenados para este domínio
+	// ── Camada 1: correspondência exata ou subdomínio ──────────────────────
 	var storedCookies string
 	for storedDomain, c := range m.storage {
 		if domainMatches(domain, storedDomain) {
@@ -48,8 +64,49 @@ func (m *Manager) Enrich(rawURL, extensionCookies, site string) string {
 		}
 	}
 
+	// ── Camada 2: fallback por nome de site ────────────────────────────────
+	// Usado quando o CDN tem domínio diferente do site principal.
+	// Ex: IDM pede cf-media.hotmart.com → storage tem hotmart.com
+	//     site="hotmart" → strings.Contains("hotmart.com", "hotmart") → ✓
+	if storedCookies == "" && site != "" {
+		for storedDomain, c := range m.storage {
+			if strings.Contains(storedDomain, site) {
+				storedCookies = c
+				break
+			}
+		}
+	}
+
+	// ── Camada 3: fallback por domínio raiz (eTLD+1) ───────────────────────
+	// Extrai "hotmart.com" de "cf-media.hotmart.com" e busca no storage.
+	// Cobre casos onde a extensão armazenou cookies pelo domínio principal
+	// e o CDN usa um subdomínio não listado no site handler.
+	if storedCookies == "" {
+		root := rootDomain(domain)
+		if root != "" && root != domain {
+			for storedDomain, c := range m.storage {
+				if domainMatches(root, storedDomain) || strings.HasSuffix(storedDomain, "."+root) {
+					storedCookies = c
+					break
+				}
+			}
+		}
+	}
+
 	// Mesclar: armazenados como base + extensão sobrescreve
 	return mergeCookies(storedCookies, extensionCookies)
+}
+
+// rootDomain extrai o domínio raiz (eTLD+1) de um hostname.
+// "cf-media.hotmart.com" → "hotmart.com"
+// "player.vimeo.com"     → "vimeo.com"
+// "hotmart.com"          → "hotmart.com" (já é raiz)
+func rootDomain(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], ".")
+	}
+	return host
 }
 
 // Get retorna os cookies armazenados para um domínio.
