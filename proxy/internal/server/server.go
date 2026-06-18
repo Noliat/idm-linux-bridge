@@ -16,6 +16,17 @@ import (
 	"idm-bridge/internal/session"
 )
 
+// Version é a versão semântica (SemVer) do idm-bridge — fonte única de
+// verdade consultada por main.go (flag --version) e por handleStatus
+// (endpoint /status, consumido pela extensão para checar compatibilidade).
+//
+// Antes desta correção, "2.0.0" (main.go) e "2.1.0" (handleStatus, aqui)
+// estavam dessincronizados — corrigido fixando AQUI a única declaração,
+// e fazendo main.go referenciá-la via server.Version.
+//
+// Ao alterar: atualizar também CHANGELOG.md na raiz do repositório.
+const Version = "3.0.0"
+
 // Config contém a configuração do servidor bridge.
 type Config struct {
 	Host       string
@@ -77,8 +88,17 @@ type CaptureRequest struct {
 	RequestType string `json:"requestType"`
 	// MediaOrigin: Origin do CDN (ex: "https://cf-media.hotmart.com").
 	// CDNs de vídeo validam este header — sem ele retornam 403.
-	MediaOrigin string `json:"mediaOrigin"`
-	HlsKeys []map[string]string `json:"hlsKeys,omitempty"`
+	MediaOrigin string              `json:"mediaOrigin"`
+	HlsKeys     []map[string]string `json:"hlsKeys,omitempty"`
+	// Campos de qualidade YouTube: usados para selecionar a resolução correta
+	// no yt-dlp quando o Método 1 (goja nsig) falha e o fallback é acionado.
+	Itag       string `json:"itag,omitempty"`       // ex: "313" (2160p VP9)
+	AudioItag  string `json:"audioItag,omitempty"`  // ex: "140" (AAC 128k)
+	// AudioUrl: URL direta do stream de áudio pareado (streams DASH YouTube).
+	AudioUrl    string `json:"audioUrl,omitempty"`
+	Height     int    `json:"height,omitempty"`     // ex: 2160
+	NeedsMerge bool   `json:"needsMerge,omitempty"` // true = precisa merge vídeo+áudio
+	VideoID    string `json:"videoId,omitempty"`    // ID do vídeo YT para yt-dlp
 }
 
 // CaptureResponse é a resposta enviada de volta à extensão.
@@ -146,6 +166,12 @@ func (s *Server) Start() error {
 }
 
 // Shutdown encerra o servidor graciosamente.
+// Launcher retorna o Launcher interno para que main.go possa monitorar
+// o canal de reinício por discrepância de servidor gráfico.
+func (s *Server) Launcher() *idm.Launcher {
+	return s.launcher
+}
+
 func (s *Server) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -238,6 +264,13 @@ func (s *Server) handleCapture(w http.ResponseWriter, r *http.Request) {
 		RequestType: req.RequestType, // "stream" | "download"
 		MediaOrigin: req.MediaOrigin, // Origin do CDN para header Origin
 		HlsKeys:     req.HlsKeys,
+		// Campos de qualidade YouTube
+		Itag:        req.Itag,
+		AudioItag:   req.AudioItag,
+		AudioUrl:    req.AudioUrl,
+		Height:      req.Height,
+		NeedsMerge:  req.NeedsMerge,
+		VideoID:     req.VideoID,
 	}
 
 	jobID, err := s.launcher.Launch(job)
@@ -263,7 +296,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	idmFound := s.launcher.IsIDMAvailable()
 	status := map[string]interface{}{
 		"status":         "running",
-		"version":        "2.1.0",
+		"version":        Version,
 		"idmFound":       idmFound,
 		"winePrefix":     s.cfg.WinePrefix,
 		"reverseProxy":   fmt.Sprintf("127.0.0.1:%d", s.launcher.ProxyPort()),
