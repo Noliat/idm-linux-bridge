@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IDM Linux Bridge</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 320px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+
+    /* ── Cabeçalho ─────────────────────────────────────────────── */
+    .header {
+      background: linear-gradient(135deg, #1a3d6b, #0d2137);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid rgba(100,160,240,0.18);
+    }
+    .header-icon {
+      width: 32px; height: 32px;
+      flex-shrink: 0;
+    }
+    .header h1   { font-size: 14px; font-weight: 600; color: #d0e8ff; }
+    .header small { display: block; font-size: 10px; color: rgba(160,200,255,0.55); }
+
+    /* ── Status ────────────────────────────────────────────────── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      background: #111827;
+      border-bottom: 1px solid #0f3460;
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #ef4444;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .status-dot.online { background: #22c55e; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.45; } }
+    .status-text { flex: 1; font-size: 11px; color: #94a3b8; }
+    .badge {
+      font-size: 9.5px; padding: 2px 6px;
+      border-radius: 8px;
+      background: #1e3a5f; color: #60a5fa;
+      border: 1px solid rgba(96,165,250,0.2);
+    }
+
+    /* ── Faixa Firefox blocking ────────────────────────────────── */
+    .intercept-mode-bar {
+      display: none;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 14px;
+      background: #0f2234;
+      border-bottom: 1px solid #0f3460;
+      font-size: 10.5px;
+      color: #7dd3fc;
+    }
+    .intercept-mode-bar.firefox { display: flex; }
+    .mode-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: #38bdf8;
+      flex-shrink: 0;
+    }
+
+    /* ── Seções ────────────────────────────────────────────────── */
+    .section {
+      padding: 11px 14px;
+      border-bottom: 1px solid #0f1e33;
+    }
+    .section-title {
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.7px;
+      color: #2d5a9e; margin-bottom: 9px;
+    }
+
+    /* ── Toggle row ────────────────────────────────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+      margin-bottom: 4px;
+    }
+    .toggle-row:last-child { margin-bottom: 0; }
+
+    .toggle-label-wrap { display: flex; flex-direction: column; gap: 1px; }
+    .toggle-label { color: #b8d4f0; font-size: 12.5px; }
+    .toggle-sublabel { font-size: 10px; color: #2d5a9e; }
+
+    /* Toggle switch */
+    .toggle { position: relative; width: 34px; height: 19px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: #1e2d42; border-radius: 19px;
+      cursor: pointer; transition: 0.18s;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .toggle-slider:before {
+      content: "";
+      position: absolute;
+      width: 13px; height: 13px;
+      left: 3px; top: 3px;
+      background: #64748b; border-radius: 50%;
+      transition: 0.18s;
+    }
+    input:checked + .toggle-slider { background: #1a3d6b; border-color: rgba(96,165,250,0.3); }
+    input:checked + .toggle-slider:before {
+      transform: translateX(15px);
+      background: #f97316;
+    }
+
+    /* ── URL manual ────────────────────────────────────────────── */
+    .url-input-row { display: flex; gap: 6px; }
+    .url-input {
+      flex: 1;
+      background: #0b1625; border: 1px solid #1e3a5f;
+      border-radius: 5px; padding: 6px 9px;
+      color: #c8dff5; font-size: 11.5px; outline: none;
+      transition: border-color 0.15s;
+    }
+    .url-input:focus { border-color: #f97316; }
+    .url-input::placeholder { color: #1e3a5f; }
+
+    /* ── Botões ────────────────────────────────────────────────── */
+    .btn {
+      display: flex; align-items: center; justify-content: center;
+      gap: 6px; width: 100%; padding: 7px 10px;
+      border: none; border-radius: 5px; cursor: pointer;
+      font-size: 12px; font-weight: 500;
+      transition: opacity 0.15s, background 0.15s;
+      margin-bottom: 5px;
+    }
+    .btn:last-child { margin-bottom: 0; }
+    .btn:hover { opacity: 0.85; }
+
+    .btn-secondary {
+      background: linear-gradient(180deg, #1a3d6b, #0f2744);
+      color: #7ec8ff;
+      border: 1px solid rgba(100,160,240,0.18);
+    }
+    .btn-ghost {
+      background: #0b1625;
+      color: #2d5a9e;
+      border: 1px solid #0f2234;
+    }
+    .btn-icon {
+      background: linear-gradient(180deg, #1a3d6b, #0f2744);
+      border: 1px solid rgba(100,160,240,0.18);
+      border-radius: 5px;
+      padding: 6px 9px; cursor: pointer; color: #7ec8ff;
+      transition: opacity 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-icon:hover { opacity: 0.8; }
+
+    /* ── Rodapé ────────────────────────────────────────────────── */
+    .footer {
+      padding: 9px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .footer-link {
+      font-size: 10.5px; color: #1e3a5f;
+      cursor: pointer; transition: color 0.15s;
+    }
+    .footer-link:hover { color: #60a5fa; }
+  </style>
+</head>
+<body>
+
+  <!-- Cabeçalho com ícone SVG fiel ao IDM -->
+  <div class="header">
+    <svg class="header-icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="hSph" cx="36%" cy="32%" r="68%">
+          <stop offset="0%"   stop-color="#7ec8ff"/>
+          <stop offset="40%"  stop-color="#2979d0"/>
+          <stop offset="100%" stop-color="#0d3070"/>
+        </radialGradient>
+        <radialGradient id="hSpec" cx="30%" cy="22%" r="40%">
+          <stop offset="0%"   stop-color="rgba(255,255,255,0.50)"/>
+          <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+        </radialGradient>
+        <clipPath id="hClip"><circle cx="16" cy="15" r="12"/></clipPath>
+      </defs>
+      <circle cx="16" cy="15" r="12" fill="url(#hSph)"/>
+      <g clip-path="url(#hClip)" fill="none" stroke="rgba(255,255,255,0.20)" stroke-width="0.9">
+        <ellipse cx="16" cy="15" rx="12" ry="4.5"/>
+        <ellipse cx="16" cy="10" rx="8.5" ry="2.2"/>
+        <ellipse cx="16" cy="20" rx="8.5" ry="2.2"/>
+        <ellipse cx="16" cy="15" rx="4.5" ry="12"/>
+        <ellipse cx="16" cy="15" rx="9.5" ry="12" transform="rotate(45 16 15)"/>
+        <ellipse cx="16" cy="15" rx="9.5" ry="12" transform="rotate(-45 16 15)"/>
+      </g>
+      <circle cx="16" cy="15" r="12" fill="url(#hSpec)"/>
+      <circle cx="16" cy="15" r="12" fill="none" stroke="rgba(10,40,100,0.45)" stroke-width="1"/>
+      <rect    x="14.5" y="17"   width="3"   height="6.5" rx="1.5" fill="#f97316"/>
+      <polygon points="11,21     16,27     21,21"             fill="#f97316"/>
+      <rect    x="10"   y="26.5" width="12"  height="2.5" rx="1.2" fill="#f97316"/>
+    </svg>
+    <div>
+      <h1>IDM Linux Bridge</h1>
+      <small>Integração com Wine · v2.2</small>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">Verificando...</span>
+    <span class="badge">v2.2</span>
+  </div>
+
+  <!-- Faixa Firefox blocking -->
+  <div class="intercept-mode-bar" id="interceptModeBar">
+    <div class="mode-dot"></div>
+    <span>Firefox: modo <strong>blocking</strong> ativo</span>
+  </div>
+
+  <!-- Controles -->
+  <div class="section">
+    <div class="section-title">Controles</div>
+
+    <div class="toggle-row">
+      <div class="toggle-label-wrap">
+        <span class="toggle-label">Interceptar downloads</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="toggleIntercept" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <!-- NOVO: toggle do botão flutuante -->
+    <div class="toggle-row">
+      <div class="toggle-label-wrap">
+        <span class="toggle-label">Botão flutuante</span>
+        <span class="toggle-sublabel">Exibir botão sobre players de vídeo</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="toggleFloatBtn" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-label-wrap">
+        <span class="toggle-label">Notificações</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="toggleNotifications" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-label-wrap">
+        <span class="toggle-label">Modo silencioso</span>
+        <span class="toggle-sublabel">Ligado = inicia sem janela IDM</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="toggleSilent">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Download manual -->
+  <div class="section">
+    <div class="section-title">Download manual</div>
+    <div class="url-input-row">
+      <input type="url" class="url-input" id="manualUrl" placeholder="Cole uma URL aqui...">
+      <button class="btn-icon" id="manualDownload" title="Enviar ao IDM">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Ações rápidas -->
+  <div class="section">
+    <div class="section-title">Ações rápidas</div>
+    <button class="btn btn-secondary" id="btnFindVideos">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="23 7 16 12 23 17 23 7"/>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+      </svg>
+      Capturar vídeo desta página
+    </button>
+    <button class="btn btn-ghost" id="btnCheckBridge">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="23 4 23 10 17 10"/>
+        <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+      </svg>
+      Verificar bridge
+    </button>
+  </div>
+
+  <!-- Rodapé -->
+  <div class="footer">
+    <span class="footer-link" id="openDocs">📖 Documentação</span>
+    <span class="footer-link" id="openSettings">⚙ Configurações</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+{
+  "manifest_version": 3,
+  "name": "IDM Linux Bridge",
+  "version": "3.0.3",
+  "description": "Integração do Internet Download Manager com Linux via Wine",
+
+  "permissions": [
+    "webRequest",
+    "downloads",
+    "tabs",
+    "cookies",
+    "storage",
+    "notifications",
+    "contextMenus",
+    "declarativeNetRequest",
+    "scripting",
+    "alarms",
+    "webNavigation"
+  ],
+
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:6969/*"
+  ],
+
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+
+  "chrome_url_overrides": {
+    "downloads": "src/downloads.html"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "js": ["src/parser_m3u8.js", "src/interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["src/page_inject.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ],
+
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/*.svg",
+        "icons/*.png",
+        "src/interceptor.js",
+        "src/parser_m3u8.js",
+        "src/page_inject.js",
+        "src/downloads_page.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

@@ -11,7 +11,12 @@ import (
 	"idm-bridge/internal/server"
 )
 
-const version = "2.0.0"
+// Códigos de saída:
+//   0 — encerramento normal (SIGTERM/SIGINT)
+//   1 — erro fatal de inicialização
+//   2 — reinício solicitado por discrepância de servidor gráfico
+//       (systemd reinicia automaticamente; wrapper script também)
+const ExitCodeRestart = 2
 
 func main() {
 	var (
@@ -25,7 +30,7 @@ func main() {
 	flag.Parse()
 
 	if *ver {
-		fmt.Printf("IDM Linux Bridge v%s\n", version)
+		fmt.Printf("IDM Linux Bridge v%s\n", server.Version)
 		os.Exit(0)
 	}
 
@@ -46,7 +51,7 @@ func main() {
 		log.Fatalf("[ERRO] Falha ao iniciar servidor: %v\n", err)
 	}
 
-	// Graceful shutdown
+	// Graceful shutdown via SIGINT/SIGTERM
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -57,7 +62,28 @@ func main() {
 		os.Exit(0)
 	}()
 
-	log.Printf("[INFO] IDM Linux Bridge v%s iniciado em %s:%d\n", version, *host, *port)
+	// Monitorar canal de reinício por discrepância de servidor gráfico.
+	//
+	// Quando watchLoginEvent ou watchDisplayServer detectam que o bridge foi
+	// iniciado com um servidor gráfico diferente do que está ativo na sessão
+	// (ex: cache dizia Wayland mas usuário logou em X11), o Launcher sinaliza
+	// restartCh com o servidor gráfico correto.
+	//
+	// Resposta: shutdown gracioso + exit(2).
+	// systemd (Restart=on-failure ou Restart=always) reinicia o processo.
+	// No novo processo, detectDisplayServer() encontrará a sessão gráfica
+	// ativa e usará o servidor correto desde o início.
+	go func() {
+		newDS := <-srv.Launcher().RestartCh()
+		log.Printf("[INFO] ⚡ Reiniciando — servidor gráfico mudou para: %s\n", newDS)
+		log.Printf("[INFO] Aguardando encerramento gracioso dos jobs em andamento...\n")
+		srv.Shutdown()
+		log.Printf("[INFO] Saindo com código %d (reinício solicitado)\n", ExitCodeRestart)
+		os.Exit(ExitCodeRestart)
+	}()
+
+	log.Printf("[INFO] IDM Linux Bridge v%s iniciado em %s:%d (servidor gráfico: %s)\n",
+		server.Version, *host, *port, srv.Launcher().DisplayServerName())
 	if err := srv.Start(); err != nil {
 		log.Fatalf("[ERRO] Servidor encerrado: %v\n", err)
 	}

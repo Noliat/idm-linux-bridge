@@ -1,16 +1,24 @@
-.PHONY: build install run stop logs clean test fmt help
+.PHONY: build install run stop logs clean test fmt help version
 
 BINARY_NAME := idm-bridge
 INSTALL_DIR := $(HOME)/.local/bin
 CONFIG_DIR  := $(HOME)/.config/idm-bridge
-VERSION     := 1.0.0
 
 # ─── Build ──────────────────────────────────────────────────
+# A versão NÃO é fixada aqui — vem de proxy/internal/server/server.go
+# (const Version), a única fonte de verdade do SemVer do proxy. Antes,
+# este Makefile tinha VERSION := 1.0.0 e tentava injetá-la via
+# -X main.version=..., o que nunca funcionou de fato (-X só sobrescreve
+# var, não const) — o binário sempre reportava a versão hardcoded em
+# main.go, dessincronizada deste arquivo.
+
+version:
+	@grep -oP 'const Version = "\K[^"]+' proxy/internal/server/server.go
 
 build:
-	@echo "→ Compilando $(BINARY_NAME)..."
+	@echo "→ Compilando $(BINARY_NAME) v$$(make -s version)..."
 	@cd proxy && CGO_ENABLED=0 GOOS=linux go build \
-		-ldflags="-s -w -X main.version=$(VERSION)" \
+		-ldflags="-s -w" \
 		-o ../bin/$(BINARY_NAME) \
 		./cmd/bridge/
 	@echo "✓ Binário: bin/$(BINARY_NAME)"
@@ -97,6 +105,7 @@ help:
 	@echo ""
 	@echo "IDM Linux Bridge — Comandos disponíveis:"
 	@echo ""
+	@echo "  make version        Exibir versão atual do proxy"
 	@echo "  make build          Compilar binário"
 	@echo "  make install        Compilar e instalar em ~/.local/bin"
 	@echo "  make run            Rodar localmente (desenvolvimento)"

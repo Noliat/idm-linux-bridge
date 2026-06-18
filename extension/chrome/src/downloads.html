@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Downloads — IDM Linux Bridge</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #1a1a2e;
+      --surface:  #16213e;
+      --card:     #0f3460;
+      --accent:   #4a9eff;
+      --accent2:  #22c55e;
+      --danger:   #ef4444;
+      --warn:     #f59e0b;
+      --text:     #e2e8f0;
+      --muted:    #94a3b8;
+      --border:   rgba(100,160,240,0.15);
+      --radius:   8px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────────── */
+    .header {
+      background: linear-gradient(135deg, #1a3d6b, #0d2137);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header img { width: 28px; height: 28px; }
+    .header h1  { font-size: 16px; font-weight: 600; color: var(--accent); }
+    .header-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    /* ── Toolbar ─────────────────────────────────────── */
+    .toolbar {
+      padding: 12px 24px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .search-box {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 7px 12px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .search-box:focus { border-color: var(--accent); }
+    .search-box::placeholder { color: var(--muted); }
+
+    .filter-btn {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 7px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .filter-btn:hover    { border-color: var(--accent); color: var(--accent); }
+    .filter-btn.active   { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* ── Lista ───────────────────────────────────────── */
+    .list {
+      padding: 16px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    /* ── Card de download ────────────────────────────── */
+    .dl-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .dl-card:hover {
+      border-color: rgba(74,158,255,.3);
+      box-shadow: 0 0 0 1px rgba(74,158,255,.1);
+    }
+
+    /* ── Ícone de tipo ───────────────────────────────── */
+    .dl-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .dl-icon.video  { background: rgba(74,158,255,.15);  color: var(--accent);  }
+    .dl-icon.audio  { background: rgba(139,92,246,.15);  color: #8b5cf6;        }
+    .dl-icon.doc    { background: rgba(245,158,11,.15);  color: var(--warn);    }
+    .dl-icon.archive{ background: rgba(34,197,94,.15);   color: var(--accent2); }
+    .dl-icon.app    { background: rgba(239,68,68,.15);   color: var(--danger);  }
+    .dl-icon.other  { background: rgba(148,163,184,.1);  color: var(--muted);   }
+
+    /* ── Info principal ──────────────────────────────── */
+    .dl-info { min-width: 0; }
+
+    .dl-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+
+    .dl-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+
+    .dl-progress-bar {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .dl-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width .3s;
+    }
+    .dl-progress-fill.complete { background: var(--accent2); }
+    .dl-progress-fill.error    { background: var(--danger);  }
+
+    /* ── Badge de estado ─────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .3px;
+      text-transform: uppercase;
+    }
+    .badge.in-progress { background: rgba(74,158,255,.15);  color: var(--accent);  }
+    .badge.complete    { background: rgba(34,197,94,.15);   color: var(--accent2); }
+    .badge.interrupted { background: rgba(239,68,68,.15);   color: var(--danger);  }
+    .badge.cancelled   { background: rgba(148,163,184,.1);  color: var(--muted);   }
+    .badge.paused      { background: rgba(245,158,11,.15);  color: var(--warn);    }
+
+    /* ── Ações ───────────────────────────────────────── */
+    .dl-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    /* Botão principal: Transferir para IDM */
+    .btn-idm {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--accent);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+      white-space: nowrap;
+    }
+    .btn-idm:hover   { background: #3b8fe8; }
+    .btn-idm:active  { transform: scale(.97); }
+    .btn-idm:disabled{
+      background: rgba(74,158,255,.3);
+      color: rgba(255,255,255,.5);
+      cursor: not-allowed;
+    }
+    .btn-idm svg { flex-shrink: 0; }
+
+    /* Botão secundário (abrir pasta, copiar URL) */
+    .btn-icon {
+      width: 30px; height: 30px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--muted);
+      transition: all .15s;
+    }
+    .btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-icon.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* ── Empty state ─────────────────────────────────── */
+    .empty {
+      text-align: center;
+      padding: 60px 24px;
+      color: var(--muted);
+    }
+    .empty .emoji { font-size: 48px; margin-bottom: 12px; }
+    .empty p      { font-size: 15px; }
+    .empty small  { font-size: 12px; margin-top: 6px; display: block; }
+
+    /* ── Toast ───────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      font-size: 13px;
+      color: var(--text);
+      box-shadow: 0 4px 20px rgba(0,0,0,.4);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .25s, transform .25s;
+      pointer-events: none;
+      z-index: 99;
+      max-width: 340px;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+    #toast.success { border-color: var(--accent2); }
+    #toast.error   { border-color: var(--danger); }
+
+    /* ── Spinner ─────────────────────────────────────── */
+    .spin {
+      width: 12px; height: 12px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      display: none;
+    }
+    .btn-idm.loading .spin { display: block; }
+    .btn-idm.loading .btn-label { display: none; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Bridge status ───────────────────────────────── */
+    .bridge-banner {
+      display: none;
+      background: rgba(239,68,68,.1);
+      border: 1px solid rgba(239,68,68,.3);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      margin: 12px 24px 0;
+      font-size: 12px;
+      color: #fca5a5;
+      align-items: center;
+      gap: 8px;
+    }
+    .bridge-banner.visible { display: flex; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <img src="../icons/icon48.png" alt="IDM">
+  <h1>Downloads</h1>
+  <div class="header-actions">
+    <span id="bridge-dot" style="
+      width:8px;height:8px;border-radius:50%;
+      background:#ef4444;display:inline-block;
+      transition:background .3s;" title="IDM Bridge offline"></span>
+    <span id="bridge-label" style="font-size:11px;color:#94a3b8;">Bridge offline</span>
+  </div>
+</div>
+
+<div id="bridge-banner" class="bridge-banner">
+  ⚠ IDM Bridge offline — inicie com <code>systemctl --user start idm-bridge</code>
+</div>
+
+<div class="toolbar">
+  <input class="search-box" id="search" placeholder="Filtrar por nome..." type="text">
+  <button class="filter-btn active" data-filter="all">Todos</button>
+  <button class="filter-btn" data-filter="in_progress">Baixando</button>
+  <button class="filter-btn" data-filter="complete">Concluídos</button>
+  <button class="filter-btn" data-filter="interrupted">Com erro</button>
+</div>
+
+<div class="list" id="list"></div>
+<div id="toast"></div>
+
+<script src="downloads_page.js"></script>
+</body>
+</html>
